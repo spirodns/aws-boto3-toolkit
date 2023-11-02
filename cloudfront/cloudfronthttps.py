@@ -2,6 +2,8 @@
 
 import boto3 
 import pprint
+import argparse
+import sys
 
 # Create CloudFront client
 cf_client = boto3.client('cloudfront')
@@ -56,19 +58,39 @@ def change_distribution_policies(distribution_id_list):
             IfMatch=etag  # This ensures you're updating the version of the config you just fetched
         )
         
-        print(f"Updated distribution to redirect HTTP to HTTPS for viewers and ensured")
+        print(f"Updated distribution to redirect HTTP to HTTPS for viewers")
 
 
 
 
-def main():
+def main(update_policy):
 
     distribution_id_list = cloudfront_distributions_list()
     print(distribution_id_list)
 
-    change_distribution_policies(distribution_id_list)
 
+    if update_policy is None:
+        user_input = input("Do you want to update the ViewerProtocolPolicy to 'redirect-to-https'? (yes/no): ").strip().lower()
+        update_policy = user_input in ('yes', 'y')
+
+    if update_policy:
+        change_distribution_policies(distribution_id_list)
+        print("Update complete.")
+    else:
+        print("No updates made.")
+
+    return 0  # Success
     
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Tool to manage CloudFront distributions.")
+    parser.add_argument('--update-policy', type=str, choices=['yes', 'no'], help="Update the ViewerProtocolPolicy to 'redirect-to-https' (yes/no).")
+    
+    args = parser.parse_args()
+
+    # Convert the --update-policy to a boolean if provided, else None
+    update_policy = None
+    if args.update_policy:
+        update_policy = args.update_policy == 'yes'
+
+    sys.exit(main(update_policy))
 
