@@ -1,0 +1,187 @@
+import boto3 
+import logging
+import pprint
+
+aws_profile='box-dev'
+#aws_profile='box-prod-eu'
+#aws_profile='box-prod-ap'
+#aws_profile='box-prod-us'
+#aws_profile='acxiom'
+#aws_profile='site-jap'
+
+boto3.setup_default_session(profile_name=aws_profile)
+
+
+# Create logger
+logger = logging.getLogger('my_app')
+logger.setLevel(logging.DEBUG)
+
+# Create console handler and set level to debug
+ch = logging.StreamHandler()
+ch.setLevel(logging.DEBUG)
+
+# Create file handler and set level to debug
+fh = logging.FileHandler('app.log')
+fh.setLevel(logging.DEBUG)
+
+# Add formatter to the handlers
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+ch.setFormatter(formatter)
+fh.setFormatter(formatter)
+
+# Add the handlers to the logger
+logger.addHandler(ch)
+logger.addHandler(fh)
+
+# Log messages
+logger.debug('This is a debug message')
+logger.info('This is an info message')
+
+
+
+
+def list_rds_db_snapshots():
+
+    rds_client = boto3.client('rds')
+    db_snapshots_list = []
+
+    # Fetch DB snapshots
+#    db_snapshots_system = rds_client.describe_db_snapshots()
+    db_snapshots_system = rds_client.describe_db_snapshots(SnapshotType='automated')
+
+    for snapshot in db_snapshots_system['DBSnapshots']:
+        if snapshot['Encrypted'] == False:
+            logger.debug(f"DBSnapshotIdentifier: {snapshot['DBSnapshotIdentifier']}, Status: {snapshot['Status']}, DBInstanceIdentifier: {snapshot['DBInstanceIdentifier']}, SnapshotType: {snapshot['SnapshotType']}, Engine: {snapshot['Engine']}, SnapshotCreateTime: {snapshot['SnapshotCreateTime']} , Encrypted: {snapshot['Encrypted']}")
+            db_snapshots_list.append(snapshot)
+
+    db_snapshots_manual = rds_client.describe_db_snapshots(SnapshotType='manual')
+
+    for snapshot in db_snapshots_manual['DBSnapshots']:
+        if snapshot['Encrypted'] == False:
+            logger.debug(f"DBSnapshotIdentifier: {snapshot['DBSnapshotIdentifier']}, Status: {snapshot['Status']}, DBInstanceIdentifier: {snapshot['DBInstanceIdentifier']}, SnapshotType: {snapshot['SnapshotType']}, Engine: {snapshot['Engine']}, SnapshotCreateTime: {snapshot['SnapshotCreateTime']} , Encrypted: {snapshot['Encrypted']}")
+            db_snapshots_list.append(snapshot)
+
+    return db_snapshots_list
+
+
+def list_rds_cluster_snapshots():
+
+    rds_client = boto3.client('rds')
+    cluster_snapshots_list = []
+
+    # Fetch DB cluster snapshots
+    cluster_snapshots_system = rds_client.describe_db_cluster_snapshots()
+
+    for snapshot in cluster_snapshots_system['DBClusterSnapshots']:
+        if snapshot['StorageEncrypted'] == False:
+            logger.debug(f"DBClusterSnapshotIdentifier: {snapshot['DBClusterSnapshotIdentifier']}, Status: {snapshot['Status']}, DBClusterIdentifier: {snapshot['DBClusterIdentifier']}, SnapshotType: {snapshot['SnapshotType']}, Engine: {snapshot['Engine']}, SnapshotCreateTime: {snapshot['SnapshotCreateTime']} ,Encrypted: {snapshot['StorageEncrypted']}")
+            cluster_snapshots_list.append(snapshot)
+    return cluster_snapshots_list
+
+
+def encrypt_rds_db_snapshots(source_db_snapshot_identifier,kms_key_id):
+
+    rds_client = boto3.client('rds')
+    
+    # Specify target  RDS DB encrypted snapshot name
+    target_encrypted_db_snapshot_identifier = f"{source_db_snapshot_identifier}-encrypted"
+    
+    # Create a copy of the DB snapshot with encryption enabled
+    response = rds_client.copy_db_snapshot(
+        SourceDBSnapshotIdentifier=source_db_snapshot_identifier,
+        TargetDBSnapshotIdentifier=target_encrypted_db_snapshot_identifier,
+        KmsKeyId=kms_key_id
+    )
+    
+    logger.info(f"Encrypted DB snapshot created: {response['DBSnapshot']['DBSnapshotIdentifier']}")
+
+
+def encrypt_rds_cluster_snapshots(source_cluster_snapshot_identifier,kms_key_id):
+    
+    rds_client = boto3.client('rds')
+    
+    # Specify the RDS Cluster snapshot identifier and target encrypted snapshot name
+    target_encrypted_cluster_snapshot_identifier = f"{source_cluster_snapshot_identifier}-encrypted"
+    
+    # Create a copy of the Cluster snapshot with encryption enabled
+    response = rds_client.copy_db_cluster_snapshot(
+        SourceDBClusterSnapshotIdentifier=source_cluster_snapshot_identifier,
+        TargetDBClusterSnapshotIdentifier=target_encrypted_cluster_snapshot_identifier,
+        KmsKeyId=kms_key_id
+    )
+    
+    logger.info(f"Encrypted Cluster snapshot created: {response['DBClusterSnapshot']['DBClusterSnapshotIdentifier']}")
+
+
+def list_kms_keys():
+    
+    # Initialize the KMS client
+    kms_client = boto3.client('kms')
+    
+    # List KMS keys
+    keys_response = kms_client.list_keys()
+    
+    for key in keys_response['Keys']:
+        key_id = key['KeyId']
+        key_description_response = kms_client.describe_key(KeyId=key_id)
+        key_description = key_description_response['KeyMetadata']['Description']
+        key_alias_response = kms_client.list_aliases(KeyId=key_id)
+        for key in key_alias_response['Aliases']:
+            print(key['AliasName'])
+            key_alias_name=key['AliasName']
+        print(f"KeyId: {key_id}, Alias: {key_alias_name}, Description: {key_description}")
+
+
+
+
+def get_or_create_kms_key(alias_name):
+    # Initialize the KMS client
+    kms_client = boto3.client('kms')
+    # Check if the key alias already exists
+    try:
+        response = kms_client.describe_key(KeyId=f'alias/{alias_name}')
+        key_id = response['KeyMetadata']['KeyId']
+        logger.info(f"KMS key with alias '{alias_name}' already exists with KeyId: {key_id}")
+        return key_id
+
+    except kms_client.exceptions.NotFoundException:
+        # If the key alias does not exist, create a new key
+        key_description = 'Default master key that protects my RDS database volumes when no other key is defined'
+        key_response = kms_client.create_key(
+            Description=description,
+            Origin='AWS_KMS',  # AWS managed key
+            KeyUsage='ENCRYPT_DECRYPT',
+            BypassPolicyLockoutSafetyCheck=False
+        )
+        key_id = key_response['KeyMetadata']['KeyId']
+
+        # Create an alias for the new key
+        kms_client.create_alias(
+            AliasName=f'alias/{alias_name}',
+            TargetKeyId=key_id
+        )
+        logger.info(f"Created new KMS key with alias '{alias_name}' and KeyId: {key_id}")
+        return key_id
+
+
+
+    
+
+def main():
+
+    key_alias = 'aws/rds'
+
+#    key_id = get_or_create_kms_key(key_alias)
+#    print(f"Use this KeyId for further operations: {key_id}")
+    db_snapshots_list = list_rds_db_snapshots()
+
+    cluster_snapshots_list = list_rds_cluster_snapshots()
+#    list_kms_keys()
+    # Usage
+
+
+    
+    
+    
+if __name__ == "__main__":
+    main()
