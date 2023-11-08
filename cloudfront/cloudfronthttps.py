@@ -77,13 +77,17 @@ def main(update_policy,verbose):
             cloudfront_distribution_info_verbose(distribution_id)
         if update_policy is None:
             user_input = input("Do you want to update the ViewerProtocolPolicy to 'redirect-to-https'? (yes/no): ").strip().lower()
-            update_policy = user_input in ('yes', 'y')
+            #update_policy = user_input in ('yes', 'y')
+            change_policy = user_input in ('yes', 'y')
+        else:
+            change_policy = update_policy
     
-        if update_policy:
+        if change_policy:
             change_distribution_policies(distribution_id)
             print("Update complete.")
         else:
             print("No updates made.")
+
     
     return 0  # Success
     
